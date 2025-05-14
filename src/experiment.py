@@ -59,5 +59,5 @@ if __name__ == "__main__":
         result = generator.query_model(problem)
         result_dict[id] = result
     
-    with open(os.path.join('../results', f'{args.benchmark}.json'), 'w') as f:
+    with open(os.path.join('../results', f'{args.benchmark}_{args.model}.json'), 'w') as f:
         json.dump(result_dict, f, indent=4)

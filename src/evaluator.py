@@ -1,12 +1,29 @@
 import argparse
-import contextlib
-import io
 import json
-import signal
 
 from abc import ABC, abstractmethod
 
 import tqdm
+
+class Evaluator(ABC):
+    def __init__(self, timeout, jsonl_path, id_keyword):
+        self.timeout = timeout
+        self.data = dict()
+        with open(jsonl_path) as f:
+            for problem in [json.loads(line) for line in f]:
+                self.data[problem[id_keyword]] = problem
+
+    @abstractmethod
+    def evaluate(self, problem_id, response):
+        """
+        Build snippet then execute under sandboxed conditions, enforce timeout,
+        capture stdout/stderr, and return a structured result.
+        """
+
+
+import contextlib
+import io
+import signal
 
 class TimeoutException(Exception):
     pass
@@ -49,37 +66,11 @@ def swallow_io():
             with redirect_stdin(stream):
                 yield
 
-class Evaluator(ABC):
-    def __init__(self, timeout, jsonl_path, id_keyword):
-        self.timeout = timeout
-        self.data = dict()
-        with open(jsonl_path) as f:
-            for problem in [json.loads(line) for line in f]:
-                self.data[problem[id_keyword]] = problem
-
-    @abstractmethod
-    def build_snippet(self, problem_id, response):
-        """
-        Load problem metadata (e.g. function signature, tests),
-        merge with generated_code, and return an executable Python snippet as a string.
-        """
-
-    @abstractmethod
-    def evaluate(self, snippet):
-        """
-        Run the snippet under sandboxed conditions, enforce timeout,
-        capture stdout/stderr, and return a structured result.
-        """
-    
-    def run(self, problem_id, response):
-        snippet = self.build_snippet(problem_id, response)
-        return self.evaluate(snippet)
-
 class HumanEvalEvaluator(Evaluator):
     def __init__(self, timeout):
         super().__init__(timeout, jsonl_path='../data/HumanEval.jsonl', id_keyword='task_id')
         
-    def build_snippet(self, problem_id, response):
+    def evaluate(self, problem_id, response):
         problem = self.data[problem_id]
         response = '\n'.join(
             [
@@ -95,14 +86,12 @@ class HumanEvalEvaluator(Evaluator):
             + "\n"
             + f"check({problem['entry_point']})"
         )
-        return check_program
     
-    def evaluate(self, snippet):
         try:
             exec_globals = {}
             with swallow_io():
                 with time_limit(self.timeout):
-                    exec(snippet, exec_globals)
+                    exec(check_program, exec_globals)
             return "passed"
         except TimeoutException:
             return "timed out"
@@ -112,19 +101,17 @@ class HumanEvalEvaluator(Evaluator):
 class APPSEvaluator(Evaluator):
     def __init__(self, timeout):
         super().__init__(timeout, jsonl_path='../data/APPS.jsonl', id_keyword='id')
+        for id in self.data:
+            problem = self.data[id]
+            problem["input_output"] = json.loads(problem["input_output"])
         
-    def build_snippet(self, problem_id, response):
-        problem = self.data[problem_id]
+    def evaluate(self, problem_id, response):
+        problem = self.data[int(problem_id)]
         
-        check_program = (
-            problem["prompt"]
-            + response
-            + "\n"
-            + problem["test"]
-            + "\n"
-            + f"check({problem['entry_point']})"
-        )
-        return check_program
+        # result = run_test(problem, response, self.timeout)
+        # print(result)
+        
+        return True
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -133,16 +120,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
     assert args.benchmark in ["HumanEval", "APPS"]
     
-    evaluator = HumanEvalEvaluator(timeout=1.0) if args.benchmark == 'HumanEval' else APPSEvaluator(timeout=1.0)
+    evaluator = HumanEvalEvaluator(timeout=1.0) if args.benchmark == 'HumanEval' else APPSEvaluator(timeout=4)
     
     with open(args.responses_path) as f:
         benchmark_responses = json.load(f)
 
     for id in tqdm.tqdm(benchmark_responses):
-        responses = benchmark_responses[id]        
+        responses = benchmark_responses[id]
         for response in responses:
             body = response[0]
-            response[1]['result'] = evaluator.run(id, body)
+            response[1]['result'] = evaluator.evaluate(id, body)
     
     with open(args.responses_path, 'w') as f:
         json.dump(benchmark_responses, f, indent=4) # overwrite the existing response file

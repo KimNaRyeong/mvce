@@ -1,2 +1,4 @@
+numpy
+pyext
 requests
 tqdm

@@ -98,8 +98,8 @@ class HumanEvalEvaluator(Evaluator):
         except BaseException as e:
             return f"failed: {e}"
 
+import copy
 import faulthandler
-import platform
 import sys
 
 from enum import Enum
@@ -191,7 +191,7 @@ def call_method(method, inputs):
     return _inner_call_method(method) 
 
 def run_test(problem, test, timeout):
-    in_outs = problem["input_output"]
+    in_outs = copy.deepcopy(problem["input_output"])
 
     if in_outs.get("fn_name") is None:
         which_type = CODE_TYPE.standard_input  # Standard input
@@ -255,7 +255,6 @@ def run_test(problem, test, timeout):
             method_name = "code"
             signal.alarm(timeout)
             try:
-                print(sol)
                 tmp_sol = RuntimeModule.from_string("tmp_sol", "", sol)
                 tmp = tmp_sol
                 signal.alarm(0)
@@ -490,11 +489,13 @@ class APPSEvaluator(Evaluator):
                 line for line in response.split('\n') 
                 if not line.startswith('```') and not line.strip().startswith('def ')
             ])
+
+        results = run_test(problem, response, self.timeout)
+        for idx, result in enumerate(results):
+            if type(result) != bool or not result:
+                return f'failed: testcase {idx}'
         
-        result = run_test(problem, response, self.timeout)
-        print(result)
-        
-        return True
+        return 'passed'
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -508,7 +509,7 @@ if __name__ == "__main__":
     with open(args.responses_path) as f:
         benchmark_responses = json.load(f)
 
-    for id in tqdm.tqdm(list(benchmark_responses.keys())[:1]):
+    for id in tqdm.tqdm(benchmark_responses):
         responses = benchmark_responses[id]
         for response in responses:
             body = response[0]

@@ -81,6 +81,11 @@ class HumanEvalEvaluator(Evaluator):
         
     def build_snippet(self, problem_id, response):
         problem = self.data[problem_id]
+        response = '\n'.join(
+            [
+                line for line in response.split('\n') 
+                if not line.startswith('```') and not line.strip().startswith('def ')
+            ])
         
         check_program = (
             problem["prompt"]

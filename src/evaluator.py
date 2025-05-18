@@ -33,12 +33,14 @@ def time_limit(seconds: float):
     def signal_handler(signum, frame):
         raise TimeoutException("Timed out!")
 
+    old_handler = signal.getsignal(signal.SIGALRM)
     signal.setitimer(signal.ITIMER_REAL, seconds)
     signal.signal(signal.SIGALRM, signal_handler)
     try:
         yield
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 class WriteOnlyStringIO(io.StringIO):
     def read(self, *args, **kwargs):
@@ -99,8 +101,9 @@ class HumanEvalEvaluator(Evaluator):
             return f"failed: {e}"
 
 import copy
-import faulthandler
 import sys
+
+import numpy as np
 
 from enum import Enum
 from unittest.mock import patch, mock_open
@@ -123,8 +126,6 @@ class Capturing(list):
         sys.stdout = self._stdout
 
 def reliability_guard():
-    faulthandler.disable()
-
     import builtins
     builtins.exit = None
     builtins.quit = None
@@ -190,7 +191,7 @@ def call_method(method, inputs):
             pass
     return _inner_call_method(method) 
 
-def run_test(problem, test, timeout):
+def run_test(problem, test):
     in_outs = copy.deepcopy(problem["input_output"])
 
     if in_outs.get("fn_name") is None:
@@ -210,20 +211,18 @@ def run_test(problem, test, timeout):
 
         if which_type == CODE_TYPE.call_based:
             sol += test
-            signal.alarm(timeout)
             try:
                 tmp_sol = RuntimeModule.from_string("tmp_sol", "", sol)
                 if "class Solution" not in test:
                     tmp = tmp_sol
                 else:
                     tmp = tmp_sol.Solution()
-                signal.alarm(0)
+            except TimeoutException:
+                    raise
             except Exception as e:
-                signal.alarm(0)
                 print(f"type 0 compilation error = {e}")
                 results.append(-2)
                 return results
-            signal.alarm(0)
 
         elif which_type == CODE_TYPE.standard_input:
             tmp_test = test.split("\n")
@@ -253,22 +252,21 @@ def run_test(problem, test, timeout):
             sol += tmp_test
  
             method_name = "code"
-            signal.alarm(timeout)
             try:
                 tmp_sol = RuntimeModule.from_string("tmp_sol", "", sol)
                 tmp = tmp_sol
-                signal.alarm(0)
+            except TimeoutException:
+                    raise
             except Exception as e:
-                signal.alarm(0)
                 print(f"type 1 compilation error = {e}")
                 results.append(-2)
                 return results
-            signal.alarm(0)
  
         try:
             method = getattr(tmp, method_name)  # get_attr second arg must be str
+        except TimeoutException:
+            raise
         except:
-            signal.alarm(0)
             e = sys.exc_info()
             print(f"unable to get function error = {e}")
             results.append(-2)
@@ -279,22 +277,26 @@ def run_test(problem, test, timeout):
             try:
                 if isinstance(inputs[0], dict):
                     inputs = [{int(k): v for k,v in inputs[0].items()}]
+            except TimeoutException:
+                raise
             except:
                 True
             try:
                 if isinstance(in_outs["outputs"][index], dict):
                     in_outs["outputs"][index] = [{int(k): v for k,v in in_outs["outputs"][index].items()}]
+            except TimeoutException:
+                raise
             except:
                 True
             try:
                 if isinstance(in_outs["outputs"][index][0], dict):
                     in_outs["outputs"][index] = [{int(k): v for k,v in in_outs["outputs"][index][0].items()}]
+            except TimeoutException:
+                raise
             except:
                 True
 
             if which_type == CODE_TYPE.call_based:  # Call-based
-                signal.alarm(timeout)
-                faulthandler.enable()
                 try:
                     output = method(*inputs)
 
@@ -310,23 +312,18 @@ def run_test(problem, test, timeout):
                     try:
                         if isinstance(output[0], tuple):
                             tmp_result = tmp_result or ([list(x) for x in output] == in_outs["outputs"][index][0])
-                    except:
+                    except IndexError:
                         True
                     results.append(tmp_result)
 
                     # reset the alarm
-                    signal.alarm(0)
+                except TimeoutException:
+                    raise
                 except Exception as e:
-                    signal.alarm(0)
-                    faulthandler.disable()
                     print(f"Standard input runtime error or time limit exceeded error = {e}")
                     results.append(-1)
                     continue
-                faulthandler.disable()
-                signal.alarm(0)
             elif which_type == CODE_TYPE.standard_input:  # Standard input
-                faulthandler.enable()
-                signal.alarm(timeout)
                 passed = False
 
                 if isinstance(inputs, list):
@@ -338,14 +335,13 @@ def run_test(problem, test, timeout):
                     try:
                         call_method(method, inputs)
                         # reset the alarm
-                        signal.alarm(0)
                         passed = True
+                    except TimeoutException:
+                        raise
                     except Exception as e:
                         # runtime error or took too long
-                        signal.alarm(0)
                         print(f"Call-based runtime error or time limit exceeded error = {repr(e)}{e}")
                         results.append(-1)
-                    signal.alarm(0)
 
                 if not passed:
                     continue
@@ -365,6 +361,8 @@ def run_test(problem, test, timeout):
                         tmp_result = tmp_result or (output == in_outs["outputs"][index])
                         if isinstance(output[0], str):
                             tmp_result = tmp_result or ([e.strip() for e in output] == in_outs["outputs"][index])
+                except TimeoutException:
+                    raise
                 except Exception as e:
                     print(f"Failed check1 exception = {e}")
                     pass
@@ -387,6 +385,8 @@ def run_test(problem, test, timeout):
                     tmp_result = (output == [in_outs["outputs"][index]])
                     if isinstance(in_outs["outputs"][index], list):
                         tmp_result = tmp_result or (output == in_outs["outputs"][index])
+                except TimeoutException:
+                    raise
                 except Exception as e:
                     print(f"Failed check2 exception = {e}")
                     pass
@@ -407,6 +407,8 @@ def run_test(problem, test, timeout):
                     tmp_result = (output == [in_outs["outputs"][index]])
                     if isinstance(in_outs["outputs"][index], list):
                         tmp_result = tmp_result or (output == in_outs["outputs"][index])
+                except TimeoutException:
+                    raise
                 except Exception as e:
                     print(f"Failed check3 exception = {e}")
                     pass
@@ -415,6 +417,8 @@ def run_test(problem, test, timeout):
                     output_float = [float(e) for e in output]
                     gt_float = [float(e) for e in in_outs['outputs'][index]]
                     tmp_result = tmp_result or ((len(output_float) == len(gt_float)) and np.allclose(output_float, gt_float))
+                except TimeoutException:
+                    raise
                 except Exception as e:
                     pass
                 try:
@@ -422,6 +426,8 @@ def run_test(problem, test, timeout):
                         output_float = [float(e) for e in output[0]]
                         gt_float = [float(e) for e in in_outs['outputs'][index][0]]
                         tmp_result = tmp_result or ((len(output_float) == len(gt_float)) and np.allclose(output_float, gt_float))
+                except TimeoutException:
+                    raise
                 except Exception as e:
                     pass
 
@@ -438,6 +444,8 @@ def run_test(problem, test, timeout):
 
                 try:
                     tmp_result = (output == in_outs["outputs"][index])
+                except TimeoutException:
+                    raise
                 except Exception as e:
                     print(f"Failed check4 exception = {e}")
                     continue
@@ -460,6 +468,8 @@ def run_test(problem, test, timeout):
 
                 try:
                     tmp_result = (set(frozenset(s) for s in output) == set(frozenset(s) for s in in_outs["outputs"][index]))
+                except TimeoutException:
+                    raise
                 except Exception as e:
                     print(f"Failed check5 exception = {e}")
 
@@ -468,6 +478,8 @@ def run_test(problem, test, timeout):
                 try:
                     tmp_result = tmp_result or (set(frozenset(round(float(t),3) for t in s) for s in output) ==\
                         set(frozenset(round(float(t),3) for t in s) for s in in_outs["outputs"][index]))
+                except TimeoutException:
+                    raise
                 except Exception as e:
                     print(f"Failed check6 exception = {e}")
                 
@@ -489,11 +501,14 @@ class APPSEvaluator(Evaluator):
                 line for line in response.split('\n') 
                 if not line.startswith('```') and not line.strip().startswith('def ')
             ])
-
-        results = run_test(problem, response, self.timeout)
-        for idx, result in enumerate(results):
-            if type(result) != bool or not result:
-                return f'failed: testcase {idx}'
+        try:
+            with time_limit(self.timeout):
+                results = run_test(problem, response)
+                for idx, result in enumerate(results):
+                    if type(result) != bool or not result:
+                        return f'failed: testcase {idx}'
+        except TimeoutException:
+            return "timed out"
         
         return 'passed'
     

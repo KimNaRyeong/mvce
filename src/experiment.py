@@ -24,9 +24,9 @@ class CodeGenerator(OllamaEngine):
                     print(f"Error during query: {e}")
         return results
 
-def load_benchmark(benchmark):
+def load_benchmark(benchmark, prompt_type):
     data_path = f"../data/{benchmark}.jsonl"
-    prompt_path = f"../prompt/{benchmark}_base.txt"
+    prompt_path = f"../prompt/{benchmark}_{prompt_type}.txt"
     if benchmark == "HumanEval":
         id, key = "task_id", "prompt"
     else:
@@ -44,13 +44,15 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--model', default='llama3')
     parser.add_argument('-e', '--endpoint', default='http://localhost:11434/api/generate')
     parser.add_argument('-b', '--benchmark', default='HumanEval')
+    parser.add_argument('-p', '--prompt', default='base')
     parser.add_argument('-o', '--output_dir', default='../results')
     parser.add_argument('-r', '--runs', default="20")
     args = parser.parse_args()
-    assert args.benchmark in ["HumanEval", "APPS"]
+    assert args.benchmark in ["HumanEval", "APPS"] 
+    assert args.prompt in ["base", "instruction", "rule"]
     os.makedirs(args.output_dir, exist_ok=True)
     
-    benchmark = load_benchmark(args.benchmark)
+    benchmark = load_benchmark(args.benchmark, args.prompt)
     
     generator = CodeGenerator(args.endpoint, args.model, R=int(args.runs))
 
@@ -59,5 +61,5 @@ if __name__ == "__main__":
         result = generator.query_model(problem)
         result_dict[id] = result
     
-    with open(os.path.join('../results', f'{args.benchmark}_{args.model}.json'), 'w') as f:
+    with open(os.path.join('../results', f'{args.benchmark}_{args.model}_{args.prompt}.json'), 'w') as f:
         json.dump(result_dict, f, indent=4)
